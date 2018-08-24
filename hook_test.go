@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/roistat/go-clickhouse"
-	"github.com/sirupsen/logrus"
+	"gopkg.in/sirupsen/logrus.v1"
 )
 
 var conn *clickhouse.Conn
