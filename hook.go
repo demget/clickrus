@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/roistat/go-clickhouse"
-	"github.com/sirupsen/logrus"
+	"gopkg.in/sirupsen/logrus.v1"
 )
 
 // log is the system logger. Does not participate in hook process.
