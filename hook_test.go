@@ -104,7 +104,7 @@ func newConfig() *Config {
 		BufferSize:   32768,
 		TickerPeriod: time.Second * 10,
 		Connection: ClickHouseConfig{
-			Host:    "clickhouse-server:8123",
+			Host:    "localhost:8123",
 			DB:      "logs_test",
 			Table:   "test",
 			Timeout: time.Duration(time.Second * 5),

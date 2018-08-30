@@ -1,11 +1,13 @@
 package hook
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"fmt"
 	"github.com/roistat/go-clickhouse"
 	"gopkg.in/sirupsen/logrus.v1"
 )
@@ -58,7 +60,27 @@ type (
 	}
 )
 
+func (config *ClickHouseConfig) Validate() error {
+	if len(config.Host) == 0 {
+		return errors.New("host can not be empty")
+	}
+
+	if len(config.DB) == 0 {
+		return errors.New("db can not be empty")
+	}
+
+	if len(config.Table) == 0 {
+		return errors.New("table can not be empty")
+	}
+
+	return nil
+}
+
 func newClickHouseConn(config *ClickHouseConfig) (*clickhouse.Conn, error) {
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("hook config is invalid: %s", err)
+	}
+
 	httpTransport := clickhouse.NewHttpTransport()
 	httpTransport.Timeout = config.Timeout
 	conn := clickhouse.NewConn(config.Host, httpTransport)
@@ -75,18 +97,22 @@ func newClickHouseConn(config *ClickHouseConfig) (*clickhouse.Conn, error) {
 	return conn, nil
 }
 
-func parseLevels(lvls []string) ([]logrus.Level, error) {
-	var levels = make([]logrus.Level, 0, len(lvls))
+func exists(config *ClickHouseConfig, conn *clickhouse.Conn) error {
+	queryExists := fmt.Sprintf("EXISTS TABLE %s.%s", config.DB, config.Table)
+	row := clickhouse.NewQuery(queryExists)
 
-	for _, lvl := range lvls {
-		level, err := logrus.ParseLevel(lvl)
-		if err != nil {
-			return levels, err
-		}
-		levels = append(levels, level)
+	var exists int8
+	iter := row.Iter(conn)
+	iter.Scan(&exists)
+	if err := iter.Error(); err != nil {
+		return err
 	}
 
-	return levels, nil
+	if exists == 0 {
+		return fmt.Errorf("table %s.%s does not exists", config.DB, config.Table)
+	}
+
+	return nil
 }
 
 func persist(config *Config, connection *clickhouse.Conn, rows clickhouse.Rows) error {
@@ -101,7 +127,7 @@ func persist(config *Config, connection *clickhouse.Conn, rows clickhouse.Rows) 
 		return err
 	}
 
-	log.Debug("Exec query")
+	log.Debug("exec query")
 
 	return query.Exec(connection)
 }
@@ -129,6 +155,20 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 	return
 }
 
+func ParseLevels(lvls []string) ([]logrus.Level, error) {
+	var levels = make([]logrus.Level, 0, len(lvls))
+
+	for _, lvl := range lvls {
+		level, err := logrus.ParseLevel(lvl)
+		if err != nil {
+			return levels, err
+		}
+		levels = append(levels, level)
+	}
+
+	return levels, nil
+}
+
 // NewHook creates logrus hooker to clickhouse
 func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
 	if len(logger) != 0 {
@@ -140,7 +180,11 @@ func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
 		return nil, err
 	}
 
-	levels, err := parseLevels(config.Levels)
+	if err := exists(&config.Connection, conn); err != nil {
+		return nil, err
+	}
+
+	levels, err := ParseLevels(config.Levels)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +252,11 @@ func NewAsyncHook(config *Config, logger ...*logrus.Logger) (*AsyncHook, error) 
 		return nil, err
 	}
 
-	levels, err := parseLevels(config.Levels)
+	if err := exists(&config.Connection, conn); err != nil {
+		return nil, err
+	}
+
+	levels, err := ParseLevels(config.Levels)
 	if err != nil {
 		return nil, err
 	}
@@ -267,14 +315,14 @@ func (hook *AsyncHook) Levels() []logrus.Level {
 }
 
 func (hook *AsyncHook) Flush() {
-	log.Debug("Flush...")
+	log.Debug("flush...")
 	hook.flushWg.Add(1)
 	hook.flush <- true
 	hook.flushWg.Wait()
 }
 
 func (hook *AsyncHook) Close() {
-	log.Debug("Close...")
+	log.Debug("close...")
 	hook.halt <- true
 }
 
@@ -286,7 +334,7 @@ func (hook *AsyncHook) fire() {
 	for {
 		select {
 		case fields := <-hook.bus:
-			log.Debug("Push message into bus...")
+			log.Debug("push message into bus...")
 			buffer = append(buffer, fields)
 			if len(buffer) >= hook.Config.BufferSize {
 				err := hook.SaveBatch(buffer)
@@ -301,7 +349,7 @@ func (hook *AsyncHook) fire() {
 
 		select {
 		case fields := <-hook.bus:
-			log.Debug("Push message into bus...")
+			log.Debug("push message into bus...")
 			buffer = append(buffer, fields)
 			if len(buffer) >= hook.Config.BufferSize {
 				err := hook.SaveBatch(buffer)
@@ -311,14 +359,14 @@ func (hook *AsyncHook) fire() {
 				buffer = buffer[:0]
 			}
 		case <-hook.Ticker.C:
-			log.Debug("Flush by ticker...")
+			log.Debug("flush by ticker...")
 			err := hook.SaveBatch(buffer)
 			if err != nil {
 				log.Error(err)
 			}
 			buffer = buffer[:0]
 		case <-hook.flush:
-			log.Debug("Flush by flush...")
+			log.Debug("flush by flush...")
 			err := hook.SaveBatch(buffer)
 			if err != nil {
 				log.Error(err)
@@ -326,7 +374,7 @@ func (hook *AsyncHook) fire() {
 			buffer = buffer[:0]
 			hook.flushWg.Done()
 		case <-hook.halt:
-			log.Debug("Halt...")
+			log.Debug("halt...")
 			hook.Flush()
 			return
 		}
