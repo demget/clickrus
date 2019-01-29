@@ -206,7 +206,9 @@ func (hook *Hook) addDefaultsToEntry(entry *logrus.Entry) {
 	entry.Data["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
 	entry.Data["date"] = entry.Time.UTC().Format("2006-01-02")
 	entry.Data["level"] = entry.Level.String()
-	entry.Data["stage"] = hook.Config.Stage
+	if len(hook.Config.Stage) != 0 {
+		entry.Data["stage"] = hook.Config.Stage
+	}
 }
 
 func (hook *Hook) Save(field map[string]interface{}) error {
