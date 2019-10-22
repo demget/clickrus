@@ -2,14 +2,14 @@ package hook
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"fmt"
 	"github.com/roistat/go-clickhouse"
-	"gopkg.in/sirupsen/logrus.v1"
+	"github.com/sirupsen/logrus"
 )
 
 // log is the system logger. Does not participate in hook process.
