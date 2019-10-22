@@ -228,16 +228,10 @@ func (hook *Hook) SetLevels(lvs []logrus.Level) {
 	hook.levels = lvs
 }
 
+// Levels implements logrus.Hook.
 func (hook *Hook) Levels() []logrus.Level {
 	if hook.levels == nil {
-		return []logrus.Level{
-			logrus.PanicLevel,
-			logrus.FatalLevel,
-			logrus.ErrorLevel,
-			logrus.WarnLevel,
-			logrus.InfoLevel,
-			logrus.DebugLevel,
-		}
+		return logrus.AllLevels
 	}
 
 	return hook.levels
@@ -301,16 +295,10 @@ func (hook *AsyncHook) SetLevels(lvs []logrus.Level) {
 	hook.levels = lvs
 }
 
+// Levels implements logrus.Hook.
 func (hook *AsyncHook) Levels() []logrus.Level {
 	if hook.levels == nil {
-		return []logrus.Level{
-			logrus.PanicLevel,
-			logrus.FatalLevel,
-			logrus.ErrorLevel,
-			logrus.WarnLevel,
-			logrus.InfoLevel,
-			logrus.DebugLevel,
-		}
+		return logrus.AllLevels
 	}
 
 	return hook.levels
