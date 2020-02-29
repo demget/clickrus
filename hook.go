@@ -23,6 +23,7 @@ func init() {
 }
 
 type (
+	// ClickHouseConfig configures connection to clickhouse database.
 	ClickHouseConfig struct {
 		Host    string        `yaml:"host"`
 		DB      string        `yaml:"db"`
@@ -31,6 +32,7 @@ type (
 		Timeout time.Duration `yaml:"timeout"`
 	}
 
+	// Config configures Hook and AsyncHook.
 	Config struct {
 		Stage        string           `yaml:"stage"`
 		BufferSize   int              `yaml:"buffer_size"`
@@ -39,12 +41,16 @@ type (
 		Levels       []string         `yaml:"levels"`
 	}
 
+	// Hook implements logrus.Hook interface for delivers logs to clickhouse
+	// database.
 	Hook struct {
 		Config     *Config
 		connection *clickhouse.Conn
 		levels     []logrus.Level
 	}
 
+	// AsyncHook implements logrus.Hook interface for delivers logs to
+	// clickhouse database. Creates batch and saves entry data in time ticker.
 	AsyncHook struct {
 		*Hook
 		bus     chan map[string]interface{}
@@ -101,11 +107,25 @@ func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
 	return hook, nil
 }
 
-// Flush saves entry to the database.
+// Fire saves entry to the database.
 func (h *Hook) Fire(entry *logrus.Entry) error {
 	h.addDefaultsToEntry(entry)
 
 	return h.save(entry.Data)
+}
+
+// SetLevels sets log levels to Hook.
+func (h *Hook) SetLevels(lvs []logrus.Level) {
+	h.levels = lvs
+}
+
+// Levels implements logrus.Hook.
+func (h *Hook) Levels() []logrus.Level {
+	if h.levels == nil {
+		return logrus.AllLevels
+	}
+
+	return h.levels
 }
 
 func (h *Hook) addDefaultsToEntry(entry *logrus.Entry) {
@@ -126,20 +146,6 @@ func (h *Hook) save(field map[string]interface{}) error {
 	err := persist(h.Config, h.connection, rows)
 
 	return err
-}
-
-// SetLevels sets log levels to Hook.
-func (h *Hook) SetLevels(lvs []logrus.Level) {
-	h.levels = lvs
-}
-
-// Levels implements logrus.Hook.
-func (h *Hook) Levels() []logrus.Level {
-	if h.levels == nil {
-		return logrus.AllLevels
-	}
-
-	return h.levels
 }
 
 // NewAsyncHook creates async logrus hook to clickhouse.
