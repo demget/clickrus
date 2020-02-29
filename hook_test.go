@@ -117,12 +117,6 @@ func newConfig() *Config {
 				"event_uuid",
 				"user_id",
 			},
-			Credentials: struct {
-				User     string `yaml:"user"`
-				Password string `yaml:"password"`
-			}{
-				User: "default",
-			},
 		},
 		Levels: []string{
 			"error",

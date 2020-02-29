@@ -29,11 +29,6 @@ type (
 		Table   string        `yaml:"table"`
 		Columns []string      `yaml:"columns"`
 		Timeout time.Duration `yaml:"timeout"`
-		// TODO: use me
-		Credentials struct {
-			User     string `yaml:"user"`
-			Password string `yaml:"password"`
-		} `yaml:"credentials"`
 	}
 
 	Config struct {
@@ -60,20 +55,247 @@ type (
 	}
 )
 
+// Validate checks required fields.
 func (config *ClickHouseConfig) Validate() error {
-	if len(config.Host) == 0 {
+	if config.Host == "" {
 		return errors.New("host can not be empty")
 	}
 
-	if len(config.DB) == 0 {
+	if config.DB == "" {
 		return errors.New("db can not be empty")
 	}
 
-	if len(config.Table) == 0 {
+	if config.Table == "" {
 		return errors.New("table can not be empty")
 	}
 
 	return nil
+}
+
+// NewHook creates logrus hook to clickhouse.
+func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
+	if len(logger) != 0 {
+		log = logger[0]
+	}
+
+	conn, err := newClickHouseConn(&config.Connection)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := exists(&config.Connection, conn); err != nil {
+		return nil, err
+	}
+
+	levels, err := parseLevels(config.Levels)
+	if err != nil {
+		return nil, err
+	}
+
+	hook := &Hook{
+		Config:     config,
+		connection: conn,
+		levels:     levels,
+	}
+
+	return hook, nil
+}
+
+// Flush saves entry to the database.
+func (h *Hook) Fire(entry *logrus.Entry) error {
+	h.addDefaultsToEntry(entry)
+
+	return h.save(entry.Data)
+}
+
+func (h *Hook) addDefaultsToEntry(entry *logrus.Entry) {
+	if _, ok := entry.Data["msg"]; !ok {
+		entry.Data["msg"] = entry.Message
+	}
+
+	entry.Data["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
+	entry.Data["date"] = entry.Time.UTC().Format("2006-01-02")
+	entry.Data["level"] = entry.Level.String()
+	if h.Config.Stage != "" {
+		entry.Data["stage"] = h.Config.Stage
+	}
+}
+
+func (h *Hook) save(field map[string]interface{}) error {
+	rows := buildRows(h.Config.Connection.Columns, []map[string]interface{}{field})
+	err := persist(h.Config, h.connection, rows)
+
+	return err
+}
+
+// SetLevels sets log levels to Hook.
+func (h *Hook) SetLevels(lvs []logrus.Level) {
+	h.levels = lvs
+}
+
+// Levels implements logrus.Hook.
+func (h *Hook) Levels() []logrus.Level {
+	if h.levels == nil {
+		return logrus.AllLevels
+	}
+
+	return h.levels
+}
+
+// NewAsyncHook creates async logrus hook to clickhouse.
+func NewAsyncHook(config *Config, logger ...*logrus.Logger) (*AsyncHook, error) {
+	if len(logger) != 0 {
+		log = logger[0]
+	}
+
+	conn, err := newClickHouseConn(&config.Connection)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := exists(&config.Connection, conn); err != nil {
+		return nil, err
+	}
+
+	levels, err := parseLevels(config.Levels)
+	if err != nil {
+		return nil, err
+	}
+
+	var wg sync.WaitGroup
+
+	hook := &AsyncHook{
+		Hook: &Hook{
+			Config:     config,
+			connection: conn,
+			levels:     levels,
+		},
+		bus:     make(chan map[string]interface{}, config.BufferSize),
+		flush:   make(chan bool),
+		halt:    make(chan bool),
+		flushWg: &wg,
+		Ticker:  time.NewTicker(config.TickerPeriod),
+	}
+
+	go hook.fire()
+
+	return hook, nil
+}
+
+// Fire adds entry records to batch.
+func (h *AsyncHook) Fire(entry *logrus.Entry) error {
+	h.addDefaultsToEntry(entry)
+	h.bus <- entry.Data
+
+	return nil
+}
+
+// SetLevels sets log levels to AsyncHook.
+func (h *AsyncHook) SetLevels(lvs []logrus.Level) {
+	h.levels = lvs
+}
+
+// Levels implements logrus.Hook.
+func (h *AsyncHook) Levels() []logrus.Level {
+	if h.levels == nil {
+		return logrus.AllLevels
+	}
+
+	return h.levels
+}
+
+// Flush saves batch entry records to the database.
+func (h *AsyncHook) Flush() {
+	log.Debug("flush...")
+	h.flushWg.Add(1)
+	h.flush <- true
+	h.flushWg.Wait()
+}
+
+// Close closes AsyncHook.
+func (h *AsyncHook) Close() {
+	log.Debug("close...")
+	h.halt <- true
+}
+
+func (h *AsyncHook) saveBatch(fields []map[string]interface{}) error {
+	rows := buildRows(h.Config.Connection.Columns, fields)
+	err := persist(h.Config, h.connection, rows)
+
+	return err
+}
+
+func (h *AsyncHook) fire() {
+	var buffer []map[string]interface{}
+
+	defer func() {
+		if err := h.saveBatch(buffer); err != nil {
+			log.Error(err)
+		}
+	}()
+
+	for {
+		select {
+		case fields := <-h.bus:
+			log.Debug("push message into bus...")
+			buffer = append(buffer, fields)
+			if len(buffer) >= h.Config.BufferSize {
+				err := h.saveBatch(buffer)
+				if err != nil {
+					log.Error(err)
+				}
+				buffer = buffer[:0]
+			}
+			continue
+		default:
+		}
+
+		select {
+		case fields := <-h.bus:
+			log.Debug("push message into bus...")
+			buffer = append(buffer, fields)
+			if len(buffer) >= h.Config.BufferSize {
+				err := h.saveBatch(buffer)
+				if err != nil {
+					log.Error(err)
+				}
+				buffer = buffer[:0]
+			}
+		case <-h.Ticker.C:
+			log.Debug("flush by ticker...")
+			err := h.saveBatch(buffer)
+			if err != nil {
+				log.Error(err)
+			}
+			buffer = buffer[:0]
+		case <-h.flush:
+			log.Debug("flush by flush...")
+			err := h.saveBatch(buffer)
+			if err != nil {
+				log.Error(err)
+			}
+			buffer = buffer[:0]
+			h.flushWg.Done()
+		case <-h.halt:
+			log.Debug("halt...")
+			h.Flush()
+			return
+		}
+	}
+}
+
+func parseLevels(lvls []string) ([]logrus.Level, error) {
+	var levels = make([]logrus.Level, 0, len(lvls))
+
+	for _, lvl := range lvls {
+		level, err := logrus.ParseLevel(lvl)
+		if err != nil {
+			return levels, err
+		}
+		levels = append(levels, level)
+	}
+
+	return levels, nil
 }
 
 func newClickHouseConn(config *ClickHouseConfig) (*clickhouse.Conn, error) {
@@ -84,11 +306,6 @@ func newClickHouseConn(config *ClickHouseConfig) (*clickhouse.Conn, error) {
 	httpTransport := clickhouse.NewHttpTransport()
 	httpTransport.Timeout = config.Timeout
 	conn := clickhouse.NewConn(config.Host, httpTransport)
-
-	//params := url.Values{}
-	//params.Add("user", config.Credentials.User)
-	//params.Add("password", config.Credentials.Password)
-	//conn.SetParams(params)
 
 	if err := conn.Ping(); err != nil {
 		return nil, err
@@ -137,16 +354,16 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 		row := clickhouse.Row{}
 
 		for _, column := range columns {
-			if _, ok := field[column]; !ok {
-				// TODO: refactor me
-				if strings.Index(column, "_id") != -1 || strings.Index(column, "cnt") != -1 {
-					field[column] = 0
+			val, ok := field[column]
+			if !ok {
+				if isIntField(column) {
+					val = 0
 				} else {
-					field[column] = ""
+					val = ""
 				}
 			}
 
-			row = append(row, field[column])
+			row = append(row, val)
 		}
 
 		rows = append(rows, row)
@@ -155,219 +372,9 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 	return
 }
 
-func ParseLevels(lvls []string) ([]logrus.Level, error) {
-	var levels = make([]logrus.Level, 0, len(lvls))
-
-	for _, lvl := range lvls {
-		level, err := logrus.ParseLevel(lvl)
-		if err != nil {
-			return levels, err
-		}
-		levels = append(levels, level)
+func isIntField(name string) bool {
+	if name == "cnt" || strings.Contains(name, "_id") {
+		return true
 	}
-
-	return levels, nil
-}
-
-// NewHook creates logrus hooker to clickhouse
-func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
-	if len(logger) != 0 {
-		log = logger[0]
-	}
-
-	conn, err := newClickHouseConn(&config.Connection)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := exists(&config.Connection, conn); err != nil {
-		return nil, err
-	}
-
-	levels, err := ParseLevels(config.Levels)
-	if err != nil {
-		return nil, err
-	}
-
-	hook := &Hook{
-		Config:     config,
-		connection: conn,
-		levels:     levels,
-	}
-
-	return hook, nil
-}
-
-func (hook *Hook) addDefaultsToEntry(entry *logrus.Entry) {
-	if _, ok := entry.Data["msg"]; !ok {
-		entry.Data["msg"] = entry.Message
-	}
-
-	entry.Data["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
-	entry.Data["date"] = entry.Time.UTC().Format("2006-01-02")
-	entry.Data["level"] = entry.Level.String()
-	if len(hook.Config.Stage) != 0 {
-		entry.Data["stage"] = hook.Config.Stage
-	}
-}
-
-func (hook *Hook) Save(field map[string]interface{}) error {
-	rows := buildRows(hook.Config.Connection.Columns, []map[string]interface{}{field})
-	err := persist(hook.Config, hook.connection, rows)
-
-	return err
-}
-
-func (hook *Hook) Fire(entry *logrus.Entry) error {
-	hook.addDefaultsToEntry(entry)
-
-	return hook.Save(entry.Data)
-}
-
-func (hook *Hook) SetLevels(lvs []logrus.Level) {
-	hook.levels = lvs
-}
-
-// Levels implements logrus.Hook.
-func (hook *Hook) Levels() []logrus.Level {
-	if hook.levels == nil {
-		return logrus.AllLevels
-	}
-
-	return hook.levels
-}
-
-// NewAsyncHook creates async logrus hooker to clickhouse
-func NewAsyncHook(config *Config, logger ...*logrus.Logger) (*AsyncHook, error) {
-	if len(logger) != 0 {
-		log = logger[0]
-	}
-
-	conn, err := newClickHouseConn(&config.Connection)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := exists(&config.Connection, conn); err != nil {
-		return nil, err
-	}
-
-	levels, err := ParseLevels(config.Levels)
-	if err != nil {
-		return nil, err
-	}
-
-	var wg sync.WaitGroup
-
-	hook := &AsyncHook{
-		Hook: &Hook{
-			Config:     config,
-			connection: conn,
-			levels:     levels,
-		},
-		bus:     make(chan map[string]interface{}, config.BufferSize),
-		flush:   make(chan bool),
-		halt:    make(chan bool),
-		flushWg: &wg,
-		Ticker:  time.NewTicker(config.TickerPeriod),
-	}
-
-	go hook.fire()
-
-	return hook, nil
-}
-
-func (hook *AsyncHook) SaveBatch(fields []map[string]interface{}) error {
-	rows := buildRows(hook.Config.Connection.Columns, fields)
-	err := persist(hook.Config, hook.connection, rows)
-
-	return err
-}
-
-func (hook *AsyncHook) Fire(entry *logrus.Entry) error {
-	hook.addDefaultsToEntry(entry)
-	hook.bus <- entry.Data
-
-	return nil
-}
-
-func (hook *AsyncHook) SetLevels(lvs []logrus.Level) {
-	hook.levels = lvs
-}
-
-// Levels implements logrus.Hook.
-func (hook *AsyncHook) Levels() []logrus.Level {
-	if hook.levels == nil {
-		return logrus.AllLevels
-	}
-
-	return hook.levels
-}
-
-func (hook *AsyncHook) Flush() {
-	log.Debug("flush...")
-	hook.flushWg.Add(1)
-	hook.flush <- true
-	hook.flushWg.Wait()
-}
-
-func (hook *AsyncHook) Close() {
-	log.Debug("close...")
-	hook.halt <- true
-}
-
-func (hook *AsyncHook) fire() {
-	var buffer []map[string]interface{}
-
-	defer hook.SaveBatch(buffer)
-
-	for {
-		select {
-		case fields := <-hook.bus:
-			log.Debug("push message into bus...")
-			buffer = append(buffer, fields)
-			if len(buffer) >= hook.Config.BufferSize {
-				err := hook.SaveBatch(buffer)
-				if err != nil {
-					log.Error(err)
-				}
-				buffer = buffer[:0]
-			}
-			continue
-		default:
-		}
-
-		select {
-		case fields := <-hook.bus:
-			log.Debug("push message into bus...")
-			buffer = append(buffer, fields)
-			if len(buffer) >= hook.Config.BufferSize {
-				err := hook.SaveBatch(buffer)
-				if err != nil {
-					log.Error(err)
-				}
-				buffer = buffer[:0]
-			}
-		case <-hook.Ticker.C:
-			log.Debug("flush by ticker...")
-			err := hook.SaveBatch(buffer)
-			if err != nil {
-				log.Error(err)
-			}
-			buffer = buffer[:0]
-		case <-hook.flush:
-			log.Debug("flush by flush...")
-			err := hook.SaveBatch(buffer)
-			if err != nil {
-				log.Error(err)
-			}
-			buffer = buffer[:0]
-			hook.flushWg.Done()
-		case <-hook.halt:
-			log.Debug("halt...")
-			hook.Flush()
-			return
-		}
-
-	}
+	return false
 }
