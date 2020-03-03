@@ -53,25 +53,24 @@ type (
 	// clickhouse database. Creates batch and saves entry data in time ticker.
 	AsyncHook struct {
 		*Hook
-		bus     chan map[string]interface{}
-		flush   chan bool
-		halt    chan bool
-		flushWg *sync.WaitGroup
-		Ticker  *time.Ticker
+		bus         chan map[string]interface{}
+		flush, halt chan bool
+		flushWg     *sync.WaitGroup
+		Ticker      *time.Ticker
 	}
 )
 
 // Validate checks required fields.
-func (config *ClickHouseConfig) Validate() error {
-	if config.Host == "" {
+func (c *ClickHouseConfig) Validate() error {
+	if c.Host == "" {
 		return errors.New("host can not be empty")
 	}
 
-	if config.DB == "" {
+	if c.DB == "" {
 		return errors.New("db can not be empty")
 	}
 
-	if config.Table == "" {
+	if c.Table == "" {
 		return errors.New("table can not be empty")
 	}
 
@@ -339,7 +338,7 @@ func exists(config *ClickHouseConfig, conn *clickhouse.Conn) error {
 }
 
 func persist(config *Config, connection *clickhouse.Conn, rows clickhouse.Rows) error {
-	if rows == nil || len(rows) == 0 {
+	if len(rows) == 0 {
 		return nil
 	}
 
@@ -379,8 +378,5 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 }
 
 func isIntField(name string) bool {
-	if name == "cnt" || strings.Contains(name, "_id") {
-		return true
-	}
-	return false
+	return name == "cnt" || strings.Contains(name, "_id")
 }
