@@ -125,29 +125,20 @@ func (h *Hook) Levels() []logrus.Level {
 	return h.levels
 }
 
-func (h *Hook) addDefaultsToEntry(entry *logrus.Entry) {
-	if _, ok := entry.Data["msg"]; !ok {
-		entry.Data["msg"] = entry.Message
-	}
-
-	entry.Data["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
-	entry.Data["date"] = entry.Time.UTC().Format("2006-01-02")
-	entry.Data["level"] = entry.Level.String()
-	if h.Config.Stage != "" {
-		entry.Data["stage"] = h.Config.Stage
-	}
-}
-
 func (h *Hook) getDataFromEntry(entry *logrus.Entry) map[string]interface{} {
-	var result map[string]interface{}
+	result := make(map[string]interface{})
 	if entry.Data != nil {
-		result = entry.Data
-	} else {
-		result = make(map[string]interface{})
+		for k, v := range entry.Data {
+			if errData, isError := v.(error); logrus.ErrorKey == k && v != nil && isError {
+				result[k] = errData.Error()
+			} else {
+				result[k] = v
+			}
+		}
 	}
 
 	result["date"] = entry.Time.UTC().Format("2006-01-02")
-	result["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
+	result["time"] = entry.Time.UTC().Format("2006-01-02T15:04:05.000Z")
 	result["message"] = entry.Message
 	result["level"] = entry.Level.String()
 
