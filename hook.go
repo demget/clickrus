@@ -108,9 +108,7 @@ func NewHook(config *Config, logger ...*logrus.Logger) (*Hook, error) {
 
 // Fire saves entry to the database.
 func (h *Hook) Fire(entry *logrus.Entry) error {
-	h.addDefaultsToEntry(entry)
-
-	return h.save(entry.Data)
+	return h.save(h.getDataFromEntry(entry))
 }
 
 // SetLevels sets log levels to Hook.
@@ -138,6 +136,22 @@ func (h *Hook) addDefaultsToEntry(entry *logrus.Entry) {
 	if h.Config.Stage != "" {
 		entry.Data["stage"] = h.Config.Stage
 	}
+}
+
+func (h *Hook) getDataFromEntry(entry *logrus.Entry) map[string]interface{} {
+	var result map[string]interface{}
+	if entry.Data != nil {
+		result = entry.Data
+	} else {
+		result = make(map[string]interface{})
+	}
+
+	result["date"] = entry.Time.UTC().Format("2006-01-02")
+	result["time"] = entry.Time.UTC().Format("2006-01-02 15:04:05")
+	result["message"] = entry.Message
+	result["level"] = entry.Level.String()
+
+	return result
 }
 
 func (h *Hook) save(field map[string]interface{}) error {
@@ -189,8 +203,7 @@ func NewAsyncHook(config *Config, logger ...*logrus.Logger) (*AsyncHook, error) 
 
 // Fire adds entry records to batch.
 func (h *AsyncHook) Fire(entry *logrus.Entry) error {
-	h.addDefaultsToEntry(entry)
-	h.bus <- entry.Data
+	h.bus <- h.getDataFromEntry(entry)
 
 	return nil
 }
