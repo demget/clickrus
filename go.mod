@@ -1,4 +1,4 @@
-module github.com/forking-projects/logrus-clickhouse-hook
+module github.com/chipx/logrus-clickhouse-hook
 
 go 1.13
 
