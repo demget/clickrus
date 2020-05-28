@@ -351,7 +351,7 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 		for _, column := range columns {
 			val, ok := field[column]
 			if !ok {
-				log.Errorf("Not defined column: %s", column)
+				row = append(row, "")
 			} else {
 				row = append(row, fmt.Sprintf("%+v", val))
 			}
