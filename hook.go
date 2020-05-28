@@ -129,6 +129,7 @@ func (h *Hook) getDataFromEntry(entry *logrus.Entry) map[string]interface{} {
 	result := make(map[string]interface{})
 	if entry.Data != nil {
 		for k, v := range entry.Data {
+			k = strings.Replace(k, "-", "_", -1)
 			if errData, isError := v.(error); logrus.ErrorKey == k && v != nil && isError {
 				result[k] = errData.Error()
 			} else {
@@ -137,8 +138,8 @@ func (h *Hook) getDataFromEntry(entry *logrus.Entry) map[string]interface{} {
 		}
 	}
 
-	result["date"] = entry.Time.UTC().Format("2006-01-02")
-	result["time"] = entry.Time.UTC().Format("2006-01-02T15:04:05.000Z")
+	result["__date"] = entry.Time.UTC().Format("2006-01-02")
+	result["__time"] = entry.Time.UTC().Format("2006-01-02T15:04:05.000")
 	result["message"] = entry.Message
 	result["level"] = entry.Level.String()
 
@@ -246,22 +247,7 @@ func (h *AsyncHook) fire() {
 	for {
 		select {
 		case fields := <-h.bus:
-			log.Debug("push message into bus...")
-			buffer = append(buffer, fields)
-			if len(buffer) >= h.Config.BufferSize {
-				err := h.saveBatch(buffer)
-				if err != nil {
-					log.Error(err)
-				}
-				buffer = buffer[:0]
-			}
-			continue
-		default:
-		}
-
-		select {
-		case fields := <-h.bus:
-			log.Debug("push message into bus...")
+			log.Debug("push message into bus... - " + fields["message"].(string))
 			buffer = append(buffer, fields)
 			if len(buffer) >= h.Config.BufferSize {
 				err := h.saveBatch(buffer)
@@ -353,7 +339,7 @@ func persist(config *Config, connection *clickhouse.Conn, rows clickhouse.Rows) 
 		return err
 	}
 
-	log.Debug("exec query")
+	log.Debugf("exec query: ", query)
 
 	return query.Exec(connection)
 }
@@ -365,22 +351,14 @@ func buildRows(columns []string, fields []map[string]interface{}) (rows clickhou
 		for _, column := range columns {
 			val, ok := field[column]
 			if !ok {
-				if isIntField(column) {
-					val = 0
-				} else {
-					val = ""
-				}
+				log.Errorf("Not defined column: %s", column)
+			} else {
+				row = append(row, fmt.Sprintf("%+v", val))
 			}
-
-			row = append(row, val)
 		}
 
 		rows = append(rows, row)
 	}
 
 	return
-}
-
-func isIntField(name string) bool {
-	return name == "cnt" || strings.Contains(name, "_id")
 }
