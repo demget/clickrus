@@ -139,7 +139,7 @@ func (h *Hook) getDataFromEntry(entry *logrus.Entry) map[string]interface{} {
 	}
 
 	result["__date"] = entry.Time.UTC().Format("2006-01-02")
-	result["__time"] = entry.Time.UTC().Format("2006-01-02T15:04:05.000")
+	result["__time"] = entry.Time.UTC().Format("2006-01-02T15:04:05")
 	result["message"] = entry.Message
 	result["level"] = entry.Level.String()
 
