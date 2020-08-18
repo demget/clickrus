@@ -1,4 +1,4 @@
-module github.com/chipx/logrus-clickhouse-hook
+module github.com/demget/clickrus
 
 go 1.13
 
