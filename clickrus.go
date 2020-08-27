@@ -67,7 +67,7 @@ func NewHook(conf Config) (*Hook, error) {
 	q.Iter(conn).Scan(&exists)
 
 	if exists == 0 {
-		return nil, fmt.Errorf("clickrus: table %s does not exists", conf.Table)
+		return nil, fmt.Errorf("clickrus: table %s does not exist", conf.Table)
 	}
 
 	var levels []logrus.Level
