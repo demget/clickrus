@@ -1,6 +1,7 @@
 package clickrus
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -150,11 +151,17 @@ func (h *Hook) saveBatch(fields []map[string]interface{}) error {
 	for _, field := range fields {
 		var row clickhouse.Row
 		for _, column := range h.Columns {
-			val, ok := field[column]
+			v, ok := field[column]
 			if !ok {
 				row = append(row, "")
+				continue
+			}
+
+			if _, ok := v.(logrus.Fields); ok {
+				data, _ := json.Marshal(v)
+				row = append(row, string(data))
 			} else {
-				row = append(row, fmt.Sprintf("%+v", val))
+				row = append(row, fmt.Sprintf("%+v", v))
 			}
 		}
 		rows = append(rows, row)
