@@ -108,8 +108,8 @@ func (h *Hook) Fire(entry *logrus.Entry) error {
 		}
 	}
 
-	result["date"] = entry.Time.Format("2006-01-02")
-	result["time"] = entry.Time.Format("2006-01-02T15:04:05")
+	result["date"] = entry.Time.UTC().Format("2006-01-02")
+	result["time"] = entry.Time.UTC().Format("2006-01-02T15:04:05")
 	result["message"] = entry.Message
 	result["level"] = entry.Level.String()
 
