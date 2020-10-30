@@ -54,9 +54,13 @@ func NewHook(conf Config) (*Hook, error) {
 	if conf.Levels == nil {
 		conf.Levels = []string{"info", "error"}
 	}
-	if conf.Columns == nil {
-		conf.Columns = []string{"date", "time", "level", "message"}
-	}
+	
+	conf.Columns = append([]string{
+		"date", 
+		"time", 
+		"level",
+		"message",
+	}, conf.Columns...)
 
 	conn := clickhouse.NewConn(conf.Addr, clickhouse.HttpTransport{Timeout: 5 * time.Second})
 	if err := conn.Ping(); err != nil {
