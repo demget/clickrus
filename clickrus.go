@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/mailru/go-clickhouse"
+	_ "github.com/mailru/go-clickhouse/v2"
 	"github.com/sirupsen/logrus"
 )
 
@@ -63,7 +63,7 @@ func NewHook(conf Config) (*Hook, error) {
 		"message",
 	}, conf.Columns...)
 
-	db, err := sql.Open("clickhouse", conf.Addr)
+	db, err := sql.Open("chhttp", conf.Addr)
 	if err != nil {
 		return nil, err
 	}
