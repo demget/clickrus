@@ -1,6 +1,7 @@
 package clickrus
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/roistat/go-clickhouse"
+	_ "github.com/mailru/go-clickhouse"
 	"github.com/sirupsen/logrus"
 )
 
@@ -30,7 +31,7 @@ type (
 		Config
 		levels      []logrus.Level
 		wg          sync.WaitGroup
-		conn        *clickhouse.Conn
+		conn        *sql.DB
 		ticker      *time.Ticker
 		bus         chan map[string]interface{}
 		flush, halt chan bool
@@ -54,26 +55,24 @@ func NewHook(conf Config) (*Hook, error) {
 	if conf.Levels == nil {
 		conf.Levels = []string{"info", "error"}
 	}
-	
+
 	conf.Columns = append([]string{
-		"date", 
-		"time", 
+		"date",
+		"time",
 		"level",
 		"message",
 	}, conf.Columns...)
 
-	conn := clickhouse.NewConn(conf.Addr, clickhouse.HttpTransport{Timeout: 5 * time.Second})
-	if err := conn.Ping(); err != nil {
+	db, err := sql.Open("clickhouse", conf.Addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
 		return nil, err
 	}
 
-	var exists int8
-	q := clickhouse.NewQuery(fmt.Sprintf("EXISTS TABLE %s", conf.Table))
-	q.Iter(conn).Scan(&exists)
-
-	if exists == 0 {
-		return nil, fmt.Errorf("clickrus: table %s does not exist", conf.Table)
-	}
+	db.SetMaxIdleConns(100)
+	db.SetMaxOpenConns(100)
 
 	var levels []logrus.Level
 	for _, lvl := range conf.Levels {
@@ -86,7 +85,7 @@ func NewHook(conf Config) (*Hook, error) {
 
 	hook := &Hook{
 		Config: conf,
-		conn:   conn,
+		conn:   db,
 		levels: levels,
 		ticker: time.NewTicker(conf.Period),
 		bus:    make(chan map[string]interface{}, conf.BufferSize),
@@ -151,9 +150,9 @@ func (h *Hook) saveBatch(fields []map[string]interface{}) error {
 		return nil
 	}
 
-	var rows clickhouse.Rows
+	var rows [][]interface{}
 	for _, field := range fields {
-		var row clickhouse.Row
+		var row []interface{}
 		for _, column := range h.Columns {
 			v, ok := field[column]
 			if !ok {
@@ -171,12 +170,13 @@ func (h *Hook) saveBatch(fields []map[string]interface{}) error {
 		rows = append(rows, row)
 	}
 
-	query, err := clickhouse.BuildMultiInsert(h.Table, h.Columns, rows)
+	query, args, err := buildMultiInsert(h.Table, h.Columns, rows)
 	if err != nil {
 		return err
 	}
 
-	return query.Exec(h.conn)
+	_, err = h.conn.Exec(query, args...)
+	return err
 }
 
 func (h *Hook) startTicker() {
@@ -217,4 +217,39 @@ func (h *Hook) startTicker() {
 			return
 		}
 	}
+}
+
+func buildMultiInsert(tbl string, cols []string, rows [][]interface{}) (string, []interface{}, error) {
+	var (
+		stmt string
+		args []interface{}
+	)
+
+	if len(cols) == 0 || len(rows) == 0 {
+		return "", nil, errors.New("rows and cols cannot be empty")
+	}
+
+	colCount := len(cols)
+	rowCount := len(rows)
+	args = make([]interface{}, colCount*rowCount)
+	argi := 0
+
+	for _, row := range rows {
+		if len(row) != colCount {
+			return "", nil, errors.New("amount of row items does not match column count")
+		}
+		for _, val := range row {
+			args[argi] = val
+			argi++
+		}
+	}
+
+	binds := strings.Repeat("?,", colCount)
+	binds = "(" + binds[:len(binds)-1] + "),"
+	batch := strings.Repeat(binds, rowCount)
+	batch = batch[:len(batch)-1]
+
+	stmt = fmt.Sprintf("INSERT INTO %s (%s) VALUES %s", tbl, strings.Join(cols, ","), batch)
+
+	return stmt, args, nil
 }
